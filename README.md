@@ -1,58 +1,43 @@
-# CS4371 Group Project 1 starter
+# CS4371 Group Project 1 — article stream and entity counts
 
-First integration milestone: publish two sample JSON messages to Kafka `topic1` and read them in PySpark Structured Streaming. This runs Spark in local mode. Add the Hacker News producer and entity processing after this path works.
+The producer polls NewsAPI's live US top headlines, normalizes each article, and publishes unseen IDs to Kafka `topic1`. Spark Structured Streaming reads `topic1`, extracts named entities with spaCy, maintains running mention counts, and publishes updated totals to `topic2`.
 
-## Prerequisites
+## Run with Docker Compose
 
-- Docker with Compose
-- Python 3.10+ (Spark 4.0.1 supports Python 3.9+)
-- Java 17 or 21 on the host (`java -version`)
+Prerequisite: Docker with Compose and a NewsAPI developer key.
 
-## Start Kafka and create topics
+1. Copy `.env.example` to `.env` and replace the placeholder `NEWS_API_KEY`. Do not commit `.env` or paste a key in source code.
+2. Run `make up` from this directory. The first build downloads Spark and spaCy's English model; the first Spark start resolves its Kafka connector, so it takes longer than later starts.
+3. Run `make status`, then `make logs`. Both `producer` and `spark` should stay running. Compose waits for Kafka to become healthy and creates `topic1` and `topic2` automatically.
+4. Run `make topic1` or `make topic2` to inspect records. Press Ctrl+C to stop following a topic. Run `make down` to stop the stack while retaining Kafka data, seen IDs, and Spark checkpoints.
 
-```bash
-docker compose up -d
-docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic topic1 --partitions 1 --replication-factor 1
-docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic topic2 --partitions 1 --replication-factor 1
-```
+If your Kafka volume already contains Guardian test messages, choose fresh topic names in `.env` (for example `ARTICLE_TOPIC=newsapi_topic1` and `ENTITY_COUNT_TOPIC=newsapi_topic2`) before `make up`. This keeps old articles and entity counts out of the new run. To inspect those custom topics, use `make topic1 ARTICLE_TOPIC=newsapi_topic1` and `make topic2 ENTITY_COUNT_TOPIC=newsapi_topic2`. The producer's seen-ID file and Spark checkpoint paths follow the article topic name.
 
-Inside Compose, clients use `kafka:19092`. Python and Spark launched on your laptop use `localhost:9092`. If port 9092 is occupied, update the mapped port, advertised host listener, and command arguments together.
+Inside Compose, services connect to `kafka:19092`. From the host, use `localhost:9092`. The Docker image uses Spark 4.0.1, matching the `spark-sql-kafka-0-10_2.13:4.0.1` connector. Both Python scripts run in separate containers from the same image.
 
-## Python environment
+### Local development without the app containers
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
+Start Kafka and topics with `docker compose up -d kafka topics`. Set `NEWS_API_KEY`, `KAFKA_BOOTSTRAP_SERVERS=localhost:9092`, and `ARTICLE_TOPIC=topic1` in your environment. Set `SEEN_IDS_FILE` to a writable local file, then run `python scripts/news_producer.py` from a Python environment with `requirements.txt` installed.
 
-On Windows, use WSL or activate the virtual environment with your shell's equivalent command.
-
-## Smoke test
-
-In terminal A, from the project directory:
+For Spark, also set `ENTITY_COUNT_TOPIC=topic2` and `CHECKPOINT_DIR` to a local directory, install the English model using `python -m spacy download en_core_web_sm`, and run:
 
 ```bash
-spark-submit --master 'local[*]' --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1 scripts/read_stream.py --bootstrap-servers localhost:9092 --topic topic1 --checkpoint checkpoints/smoke
+spark-submit --master 'local[*]' --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1 scripts/entity_stream.py
 ```
 
-The first invocation needs to resolve the Spark Kafka connector and its dependencies. In terminal B:
+Do not run the Docker app containers and the same host scripts at the same time unless you intend to run duplicate producers or streaming queries.
 
-```bash
-source .venv/bin/activate
-python scripts/publish_sample.py --bootstrap-servers localhost:9092 --topic topic1 --input examples/topic1.jsonl
-```
+## Message contracts
 
-Terminal A should print two rows with the sample IDs and text. Press Ctrl+C to stop it. A checkpoint remembers offsets; use a different checkpoint path if you intentionally want to replay old messages. Do not commit checkpoint data.
+The `topic1` Kafka key is `newsapi:` followed by the article URL. The JSON value contains `id`, `source` (publisher name), `text` (title, description, and available content), `published_at`, `ingested_at`, and `url`. NewsAPI limits `content` to 200 characters; it may overlap with the description. The producer saves acknowledged IDs so restarts do not republish the latest headlines.
 
-## Topic contract
+The `topic2` Kafka key is the entity text. Its JSON value is `{"entity":"OpenAI","count":12}`. This is the **latest running total of mentions**, not an increment. A downstream Elasticsearch index should replace the previous count for the same entity rather than sum the successive totals. Spark checkpoints its offsets and counts in the `spark-checkpoints` volume.
 
-Each Kafka record key is its stable source ID, e.g. `hn:12345678`; its value is a UTF-8 JSON object with `id`, `source`, `source_type`, `text`, `published_at`, and `ingested_at`. Timestamps are UTC ISO 8601 strings. Keep the normalized text in `text` so entity processing and ML classification can share the same input. The producer should clean HTML, ignore empty/deleted items, and avoid republishing IDs across polls. Agree as a team whether `text` combines story title and body or also includes comments.
+The producer polls every 15 minutes: a full day of one-page polling uses 96 requests against the NewsAPI developer plan's 100-request daily limit. Extra testing or fetching more pages uses additional requests. `/v2/top-headlines` is a curated feed, not a complete archive, and a single response contains at most 100 articles. For the assignment's 1,000-message batch requirement, measure your distinct `topic1` article count; you may need a separate backfill strategy. `make down` stops polling when you are finished.
 
-## Next work
+## Notes for the group
 
-1. Add a periodic Hacker News fetcher that persists seen item IDs and publishes normalized story/comment records to `topic1`.
-2. Replace the console read with entity extraction and running counts, then emit `topic2` records.
-3. Add the saved ML model as a second streaming query over `topic1` and the visualization stack.
-
-The provided smoke test does not implement named entity counting or classification yet. Keep paths and broker addresses configurable when adding those parts. Never commit secrets.
+- Each teammate runs the stack locally and uses their own NewsAPI key. The Compose network name `kafka` is available only inside that teammate's Docker stack.
+- The named Docker volumes retain data and checkpoints across `make down`. Do not use `docker compose down -v` casually; it deletes those volumes. Use a fresh checkpoint when intentionally replaying a new input topic.
+- `topic2` currently includes every spaCy entity label, including numeric and date expressions. Decide as a group which labels to display in the top-ten chart.
+- Part 2's AG News classifier, Elasticsearch, Logstash, and Kibana still need to be integrated. Document AI assistance and submit the required transcripts as specified in the assignment.
