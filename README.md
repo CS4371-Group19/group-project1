@@ -41,3 +41,50 @@ The producer polls every 15 minutes: a full day of one-page polling uses 96 requ
 - The named Docker volumes retain data and checkpoints across `make down`. Do not use `docker compose down -v` casually; it deletes those volumes. Use a fresh checkpoint when intentionally replaying a new input topic.
 - `topic2` currently includes every spaCy entity label, including numeric and date expressions. Decide as a group which labels to display in the top-ten chart.
 - Part 2's AG News classifier, Elasticsearch, Logstash, and Kibana still need to be integrated. Document AI assistance and submit the required transcripts as specified in the assignment.
+
+## Named Entity Visualization — Part 1, Step 5
+
+This component reads named entity counts from Kafka topic2 using
+Logstash, stores them in Elasticsearch, and displays the top 10
+entities in Kibana.
+
+### Requirements
+- Docker Desktop with Docker Compose
+- The project's Kafka service
+- Entity count messages in topic2, produced by the Spark application
+
+### Start the visualization services
+Run this command from the project directory:
+
+docker compose -f compose.yaml -f compose.override.yaml -f compose.apps.yaml up -d elasticsearch logstash kibana
+
+Open http://localhost:5601 after Kibana finishes starting.
+
+### Import the dashboard
+1. Open Stack Management > Saved Objects.
+2. Click Import.
+3. Select kibana/newsapi-dashboard.ndjson.
+4. Open Dashboards > NewsAPI Entity Counts Dashboard.
+
+The export contains dashboard settings, not the underlying news data.
+Data must be available in the entity-counts Elasticsearch index.
+
+### How counts are displayed
+Logstash uses each entity name as the Elasticsearch document ID.
+New counts replace the previous count for that entity.
+
+The chart uses:
+- Horizontal axis: Top 10 values of entity.keyword
+- Vertical axis: Maximum of count
+- Ranking: Maximum of count, descending
+- Other group: disabled
+
+### Results
+Graph screenshots are stored in the screenshots folder.
+Each screenshot records the actual elapsed time of the run.
+
+### Local testing limitation
+On the test computer, Docker had approximately 3.65 GiB of memory.
+Spark and Kibana were run alternately to reduce memory usage.
+Continuous operation of all services together has not yet been verified
+on this computer.
