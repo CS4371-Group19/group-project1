@@ -132,8 +132,8 @@ def main():
             if remaining_msgs < 1000:
                 print(
                     f"\n[WARNING] Found {remaining_msgs} unique messages. "
-                    "The prompt requires at least 1,000 streamed messages. Make sure your producer "
-                    "has collected enough articles before final submission.\n"
+                    "The prompt requires at least 1,000 streamed messages. Make sure producer "
+                    "has collected enough articles.\n"
                 )
             else:
                 print(f"[OK] Streamed messages threshold met (>= 1,000).")
@@ -142,9 +142,7 @@ def main():
             print(f"[WARNING] Could not read from Kafka: {e}")
             print("If Kafka is running in Docker, ensure ports are exposed or run inside Compose.")
 
-    print("\n==================================================")
     print("PART 2.2: BUILDING THE PIPELINE")
-    print("==================================================\n")
 
     # Pipeline stages:
     # RegexTokenizer: lowercase and strip punctuation (keeps only word characters \w+)
@@ -185,7 +183,7 @@ def main():
 
     pipeline = Pipeline(stages=[tokenizer, remover, hashing_tf, idf, lr])
 
-    print("Fitting MLlib Pipeline on AG News training data (this may take 1-2 minutes)...")
+    print("Fitting MLlib Pipeline on AG News training data")
     model = pipeline.fit(ag_news_df)
     print("Pipeline fitting complete!")
 
