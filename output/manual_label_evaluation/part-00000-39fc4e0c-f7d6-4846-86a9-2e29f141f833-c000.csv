@@ -1,0 +1,5 @@
+metric,value
+total_messages,50
+none_messages,11
+eligible_messages,39
+correct_predictions,23

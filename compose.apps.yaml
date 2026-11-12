@@ -21,6 +21,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
       ARTICLE_TOPIC: topic1
       ENTITY_COUNT_TOPIC: topic2
+      CLASSIFICATION_COUNT_TOPIC: topic3
     working_dir: /app
     entrypoint: ["/opt/spark/bin/spark-submit"]
     command:
