@@ -10,7 +10,7 @@ Prerequisite: Docker with Compose and a NewsAPI developer key.
 
 1. Copy `.env.example` to `.env` and replace the placeholder `NEWS_API_KEY`. Do not commit `.env` or paste a key in source code.
 2. Run `make up` from this directory. The first build downloads Spark and spaCy's English model; the first Spark start resolves its Kafka connector, so it takes longer than later starts.
-3. Run `make status`, then `make logs`. Both `producer` and `spark` should stay running. Compose waits for Kafka to become healthy and creates the required Kafka topics.
+3. Run `make status`, then `make logs`. All six services should be running. Kafka creates `topic1`, `topic2`, and `topic3` when the producer and Spark first use them.
 4. Run `make topic1` or `make topic2` to inspect records. Press Ctrl+C to stop following a topic. Run `make down` to stop the stack while retaining Kafka data, seen IDs, and Spark checkpoints.
 
 The Spark application uses these Kafka topics:
@@ -21,19 +21,19 @@ The Spark application uses these Kafka topics:
 
 Inside Compose, services connect to `kafka:19092`. From the host, use `localhost:9092`. The Docker image uses Spark 4.0.1, matching the `spark-sql-kafka-0-10_2.13:4.0.1` connector.
 
-If your Kafka volume already contains older test messages, choose fresh topic names before running the stack. This keeps old articles and entity counts out of a new run.
+`make up`, `make status`, `make logs`, and `make down` use `compose.yaml`, `compose.override.yaml`, and `compose.apps.yaml` together. If the producer or Spark exits because Kafka was still starting during the first launch, run `make up` again.
 
 ### Local development without the app containers
 
-Start Kafka and topics with:
+Start Kafka with:
 
 ```bash
-docker compose up -d kafka topics
+docker compose -f compose.yaml up -d kafka
 ```
 
-Set `NEWS_API_KEY`, `KAFKA_BOOTSTRAP_SERVERS=localhost:9092`, and `ARTICLE_TOPIC=topic1` in your environment. Set `SEEN_IDS_FILE` to a writable local file, then run `python scripts/news_producer.py` from a Python environment with `requirements.txt` installed.
+Set `NEWS_API_KEY`, `KAFKA_BOOTSTRAP_SERVERS=localhost:9092`, and `ARTICLE_TOPIC=topic1` in your environment, then run `python scripts/news_producer.py` from a Python environment with `requirements.txt` installed. The producer stores seen article IDs in `seen_article_ids.txt` in its working directory.
 
-For Spark, also set `ENTITY_COUNT_TOPIC=topic2`, `CLASSIFICATION_COUNT_TOPIC=topic3`, and `CHECKPOINT_DIR` to a local directory. Install the English model using:
+For Spark, also set `ENTITY_COUNT_TOPIC=topic2`, `CLASSIFICATION_COUNT_TOPIC=topic3`, `MODEL_PATH=models/ag_news_lr_model`, and `CHECKPOINT_DIR=checkpoints`. Install the English model using:
 
 ```bash
 python -m spacy download en_core_web_sm
@@ -73,10 +73,12 @@ https://huggingface.co/datasets/fancyzhx/ag_news
 
 The training split contains 120,000 labeled articles with `text` and `label` columns.
 
-The dataset can be downloaded using:
+Create a virtual environment, install the project dependencies, and download the dataset using:
 
 ```bash
-python download_ag_news.py
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python download_ag_news.py --output data/ag_news/train.parquet
 ```
 
 The resulting training file is stored at:
@@ -112,14 +114,42 @@ models/ag_news_lr_model
 
 The same saved model is reused for batch classification and real-time streaming. It does not need to be retrained for each classification run.
 
+To reproduce training and report the number of cleaned messages currently in Kafka, first start Kafka and then run:
+
+```bash
+docker compose -f compose.yaml -f compose.apps.yaml up -d kafka
+docker compose -f compose.yaml -f compose.apps.yaml run --rm \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/models:/app/models" \
+  --entrypoint /opt/spark/bin/spark-submit \
+  spark \
+  --master 'local[*]' \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1 \
+  /app/scripts/train_classifier.py \
+  --ag-news-path /app/data/ag_news/train.parquet \
+  --model-output-path /app/models/ag_news_lr_model \
+  --kafka-servers kafka:19092 \
+  --topic topic1
+```
+
+Training overwrites the model at the selected output path. The repository already includes a fitted model, so retraining is optional for normal execution.
+
 ### 2.3 Batch Classification
 
 The batch classifier loads the saved PipelineModel and applies it to the collected streamed news messages.
 
 Example Docker command:
 
-```powershell
-docker compose -f compose.yaml -f compose.apps.yaml run --rm --no-deps -v "${PWD}/output:/app/output" --entrypoint /opt/spark/bin/spark-submit spark --master "local[*]" /app/scripts/classify_batch.py --input /app/streamed_news.json --model /app/models/ag_news_lr_model --output /app/output/classified_news
+```bash
+docker compose -f compose.yaml -f compose.apps.yaml run --rm --no-deps \
+  -v "$PWD/output:/app/output" \
+  --entrypoint /opt/spark/bin/spark-submit \
+  spark \
+  --master 'local[*]' \
+  /app/scripts/classify_batch.py \
+  --input /app/streamed_news.json \
+  --model /app/models/ag_news_lr_model \
+  --output /app/output/classified_news
 ```
 
 The output contains the predicted category and predicted probability for every processed message.
@@ -142,14 +172,30 @@ The evaluation compares the manual labels with the model predictions. Accuracy i
 
 To generate the sample and evaluate the labels, use:
 
-```powershell
-docker compose -f compose.yaml -f compose.apps.yaml run --rm --no-deps -v "${PWD}/output:/app/output" --entrypoint /opt/spark/bin/spark-submit spark --master "local[*]" /app/scripts/sample_for_manual_labels.py
+```bash
+docker compose -f compose.yaml -f compose.apps.yaml run --rm --no-deps \
+  -v "$PWD/output:/app/output" \
+  --entrypoint /opt/spark/bin/spark-submit \
+  spark \
+  --master 'local[*]' \
+  /app/scripts/sample_for_manual_labels.py \
+  --input /app/output/classified_news \
+  --output /app/output/manual_label_sample
 ```
 
-After completing the labels in `output/manual_label_sample/manual_labels.csv`, run:
+Spark writes the sample as a `part-*.csv` file. Rename that file to `manual_labels.csv`, add a `manual_label` column, and label every row as `World`, `Sports`, `Business`, `Sci/Tech`, or `None`. An optional `label_note` column can explain each decision.
 
-```powershell
-docker compose -f compose.yaml -f compose.apps.yaml run --rm --no-deps -v "${PWD}/output:/app/output" --entrypoint /opt/spark/bin/spark-submit spark --master "local[*]" /app/scripts/evaluate_manual_labels.py
+After completing `output/manual_label_sample/manual_labels.csv`, run:
+
+```bash
+docker compose -f compose.yaml -f compose.apps.yaml run --rm --no-deps \
+  -v "$PWD/output:/app/output" \
+  --entrypoint /opt/spark/bin/spark-submit \
+  spark \
+  --master 'local[*]' \
+  /app/scripts/evaluate_manual_labels.py \
+  --input /app/output/manual_label_sample/manual_labels.csv \
+  --output /app/output/manual_label_evaluation
 ```
 
 The evaluation produces the overall accuracy, class-level results, and a confusion matrix.
@@ -179,7 +225,11 @@ CLASSIFICATION_COUNT_TOPIC=topic3
 To inspect the classification output:
 
 ```bash
-docker compose -f compose.yaml -f compose.apps.yaml exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic topic3 --from-beginning
+docker compose -f compose.yaml -f compose.apps.yaml exec kafka \
+  /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server kafka:19092 \
+  --topic topic3 \
+  --from-beginning
 ```
 
 The consumer displays classification-count updates published by Spark.
