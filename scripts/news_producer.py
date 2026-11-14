@@ -73,7 +73,6 @@ if __name__ == "__main__":
                 count = 0
                 article_list = fetch_latest_news()
                 for article in article_list:
-                    print(json.dumps(article, indent=4))
                     if article["id"] in seen_article_ids:
                         continue
 
