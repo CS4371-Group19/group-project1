@@ -14,7 +14,6 @@ COPY --chown=spark:spark scripts/ /app/scripts/
 COPY --chown=spark:spark models/ag_news_lr_model/ /app/models/ag_news_lr_model/
 RUN find /app/models/ag_news_lr_model -name '*.crc' -delete
 COPY --chown=spark:spark streamed_news.json /app/streamed_news.json
-COPY --chown=spark:spark data/ /app/data/
 
 USER spark
 
