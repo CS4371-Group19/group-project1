@@ -1,5 +1,3 @@
-"""Smoke test: read JSON records from Kafka with Spark Structured Streaming."""
-
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, from_json, udf, explode, struct, to_json, when
@@ -43,7 +41,9 @@ if __name__ == "__main__":
 
     spark = SparkSession.builder.appName("entity-and-classification-counts").master("local[*]").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
-    model = PipelineModel.load("/app/models/ag_news_lr_model")
+    model_path = os.environ.get("MODEL_PATH", "models/ag_news_lr_model")
+    checkpoint_dir = os.environ.get("CHECKPOINT_DIR", "checkpoints")
+    model = PipelineModel.load(model_path)
 
     # Read the data stream from kafka
     json_articles = (
@@ -117,7 +117,7 @@ if __name__ == "__main__":
         .format("kafka")
         .option("kafka.bootstrap.servers", kafka_servers)
         .option("topic", entity_count_topic)
-        .option("checkpointLocation", "checkpoints/count_entities")
+        .option("checkpointLocation", os.path.join(checkpoint_dir, "count_entities"))
         .outputMode("update")
         .start()    
     )
@@ -127,7 +127,7 @@ if __name__ == "__main__":
         .writeStream
         .foreachBatch(publish_classification_batch)
         .outputMode("update")
-        .option("checkpointLocation", "checkpoints/classify_articles")
+        .option("checkpointLocation", os.path.join(checkpoint_dir, "classify_articles"))
         .start()
     )
 

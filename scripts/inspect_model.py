@@ -1,5 +1,16 @@
+import argparse
+
 from pyspark.sql import SparkSession
 from pyspark.ml import PipelineModel
+
+
+parser = argparse.ArgumentParser(description="Inspect a saved AG News PipelineModel")
+parser.add_argument(
+    "--model",
+    default="models/ag_news_lr_model",
+    help="Path to the saved PipelineModel",
+)
+args = parser.parse_args()
 
 spark = (
     SparkSession.builder
@@ -10,7 +21,7 @@ spark = (
 
 print("\nLoading saved model...")
 
-model = PipelineModel.load("/app/models/ag_news_lr_model")
+model = PipelineModel.load(args.model)
 
 print("\nMODEL LOADED SUCCESSFULLY")
 

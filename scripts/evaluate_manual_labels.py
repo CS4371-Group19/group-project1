@@ -1,8 +1,21 @@
+import argparse
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, sum as spark_sum, count, when
 
-INPUT = "/app/output/manual_label_sample/manual_labels.csv"
-OUTPUT = "/app/output/manual_label_evaluation"
+
+parser = argparse.ArgumentParser(description="Evaluate 50 manually labeled messages")
+parser.add_argument(
+    "--input",
+    default="output/manual_label_sample/manual_labels.csv",
+    help="Path to the completed manual-label CSV",
+)
+parser.add_argument(
+    "--output",
+    default="output/manual_label_evaluation",
+    help="Directory where the evaluation summary should be written",
+)
+args = parser.parse_args()
 
 spark = (
     SparkSession.builder
@@ -19,7 +32,7 @@ df = (
     .option("quote", '"')
     .option("escape", '"')
     .option("encoding", "UTF-8")
-    .csv(INPUT)
+    .csv(args.input)
 )
 
 required = {"manual_label", "predicted_class"}
@@ -74,6 +87,6 @@ summary = spark.createDataFrame(
     ],
     ["metric", "value"]
 )
-summary.coalesce(1).write.mode("overwrite").option("header", True).csv(OUTPUT)
+summary.coalesce(1).write.mode("overwrite").option("header", True).csv(args.output)
 
 spark.stop()

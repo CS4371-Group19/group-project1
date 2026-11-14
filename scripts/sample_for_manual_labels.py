@@ -1,5 +1,21 @@
+import argparse
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import rand
+
+
+parser = argparse.ArgumentParser(description="Select 50 messages for manual labeling")
+parser.add_argument(
+    "--input",
+    default="output/classified_news",
+    help="Path to the batch-classification Parquet output",
+)
+parser.add_argument(
+    "--output",
+    default="output/manual_label_sample",
+    help="Directory where the manual-label CSV should be written",
+)
+args = parser.parse_args()
 
 spark = (
     SparkSession.builder
@@ -8,7 +24,7 @@ spark = (
     .getOrCreate()
 )
 
-df = spark.read.parquet("/app/output/classified_news")
+df = spark.read.parquet(args.input)
 
 sample = (
     df.orderBy(rand(seed=42))
@@ -28,7 +44,7 @@ sample.coalesce(1).write \
     .option("multiLine", True) \
     .option("quoteAll", True) \
     .option("escape", '"') \
-    .csv("/app/output/manual_label_sample")
+    .csv(args.output)
 
 print("Selected 50 articles.")
 print("Saved with CSV quoting enabled.")
