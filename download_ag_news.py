@@ -1,0 +1,1 @@
+from datasets import load_dataset; dataset = load_dataset("fancyzhx/ag_news", split="train"); print("Rows:", len(dataset)); print("Columns:", dataset.column_names); dataset.to_parquet("data/ag_news/train.parquet"); print("Saved successfully")

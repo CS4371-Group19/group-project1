@@ -1,12 +1,20 @@
-
 FROM apache/spark:4.0.1-python3
 
 USER root
-RUN python3 -m pip install --no-cache-dir requests kafka-python python-dotenv click spacy==3.8.10 \
+
+RUN python3 -m pip install --no-cache-dir \
+    requests kafka-python python-dotenv click spacy==3.8.10 \
     && python3 -m spacy download en_core_web_sm \
     && mkdir -p /app/state /app/checkpoints \
     && chown -R spark:spark /app
 
 WORKDIR /app
+
 COPY --chown=spark:spark scripts/ /app/scripts/
+COPY --chown=spark:spark models/ag_news_lr_model/ /app/models/ag_news_lr_model/
+RUN find /app/models/ag_news_lr_model -name '*.crc' -delete
+COPY --chown=spark:spark streamed_news.json /app/streamed_news.json
+COPY --chown=spark:spark data/ /app/data/
+
 USER spark
+

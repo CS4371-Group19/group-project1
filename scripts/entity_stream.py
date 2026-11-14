@@ -1,8 +1,11 @@
 """Smoke test: read JSON records from Kafka with Spark Structured Streaming."""
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, udf, explode, struct, to_json
+from pyspark.sql.functions import (
+    col, from_json, udf, explode, struct, to_json, when
+)
 from pyspark.sql.types import ArrayType, StringType, StructField, StructType
+from pyspark.ml import PipelineModel
 import spacy
 import os
 from dotenv import load_dotenv
@@ -30,13 +33,17 @@ if __name__ == "__main__":
         raise Exception("Missing ARTICLE_TOPIC")
     if os.environ["ENTITY_COUNT_TOPIC"] == "":
         raise Exception("Missing ENTITY_COUNT_TOPIC")
+    if os.environ["CLASSIFICATION_COUNT_TOPIC"] == "":
+        raise Exception("Missing CLASSIFICATION_COUNT_TOPIC")
 
     kafka_servers = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
     article_topic = os.environ["ARTICLE_TOPIC"]
     entity_count_topic = os.environ["ENTITY_COUNT_TOPIC"]
+    classification_count_topic = os.environ["CLASSIFICATION_COUNT_TOPIC"]
 
-    spark = SparkSession.builder.appName("entity-counts").master("local[*]").getOrCreate()
+    spark = SparkSession.builder.appName("entity-and-classification-counts").master("local[*]").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+    model = PipelineModel.load("/app/models/ag_news_lr_model")
 
     # Read the data stream from kafka
     json_articles = (
@@ -55,6 +62,43 @@ if __name__ == "__main__":
         .select("message.*")
         .where(col("id").isNotNull() & col("text").isNotNull())
     )
+
+    # Apply the saved AG News classification model
+    classified_articles = (
+        model.transform(articles)
+        .withColumn(
+            "predicted_class",
+            when(col("prediction") == 0, "World")
+            .when(col("prediction") == 1, "Sports")
+            .when(col("prediction") == 2, "Business")
+            .when(col("prediction") == 3, "Sci/Tech")
+        )
+    )
+
+    # Maintain running counts for each predicted class
+    classification_counts = (
+        classified_articles
+        .groupBy("predicted_class")
+        .count()
+    )
+
+    def publish_classification_batch(batch_df, batch_id):
+        (
+            batch_df
+            .select(
+                col("predicted_class").alias("key"),
+                to_json(
+                    struct("predicted_class", "count")
+                ).alias("value")
+            )
+            .write
+            .format("kafka")
+            .option("kafka.bootstrap.servers", kafka_servers)
+            .option("topic", classification_count_topic)
+            .save()
+        )
+
+
 
     # Extract the entities from text and keep count
     entity_counts = (
@@ -78,9 +122,18 @@ if __name__ == "__main__":
         .start()    
     )
 
+    publish_classifications = (
+        classification_counts
+        .writeStream
+        .foreachBatch(publish_classification_batch)
+        .outputMode("update")
+        .option("checkpointLocation", "checkpoints/classify_articles")
+        .start()
+    )
+
     try:
-        publish_kafka.awaitTermination()
+        spark.streams.awaitAnyTermination()
     finally:
         publish_kafka.stop()
+        publish_classifications.stop()
         spark.stop()
-
